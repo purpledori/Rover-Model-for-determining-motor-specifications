@@ -1,0 +1,227 @@
+####### used to model rover configuration ######
+# (Dorothy Hamza)
+# adjustable variables for :
+# Mass
+# Number of wheels
+# Diameter of wheels
+# Target speed
+# Max Incline
+# Terrain
+
+# Outputs motor requirements per wheel:
+# Torque
+# Peak Torque
+# Continuous Power
+# Wheel RPM
+
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from dataclasses import dataclass
+from typing import List, Dict, Tuple
+
+@dataclass
+class RoverConfig:
+    """Configuration for rover parameters"""
+    mass: float = 55.0 #kg
+    num_wheels: int = 4
+    wheel_diameter: float = 0.1 #meters
+    target_speed: float = 1.5 #meters/second
+    target_acceleration: float = 0.2 #meters/second^2
+    max_incline: float = 15 #degrees
+    Crr: float = 0.2 #coefficient of rolling resistance (terrain)
+    Cd: float = 0.8 #coefficient of drag (weather conditions)
+    frontal_area: float = 0.5 #meters^2
+    air_density: float = 1.2 #kg/m^3
+    drivetrain_efficiency: float = 0.8
+    safety_factor: float = 2.0
+
+@dataclass
+class MotorRequirements:
+    """Results of motor requirements calculations"""
+    total_force: float #Newtons
+    continuous_torque: float #Newton meters per wheel
+    peak_torque: float #newton meters per wheel
+    power_per_motor: float #Watts
+    wheel_rpm: float #Rotations per Minute (RPM)
+    forces: Dict[str, float] #breakdown of forces
+
+class RoverMotorCalculator:
+    """Calculator for rover motor requirements"""
+
+    def __init__(self, config: RoverConfig):
+        self.config = config
+        self.g = 9.81 #gravity m/s^2
+
+    def calculate_requirements(self) -> MotorRequirements:
+        """Calculate all motor requirements based on current configurations"""
+        cfg = self.config
+        wheel_radius = cfg.wheel_diameter / 2
+
+        #Convert incline to radians
+        incline_rad = math.radians(cfg.max_incline)
+
+        #Force calculations
+        F_roll = cfg.mass * self.g * cfg.Crr * math.cos(incline_rad)
+        F_grade = cfg.mass * self.g * math.sin(incline_rad)
+        F_accel = cfg.mass * cfg.target_acceleration
+        F_drag = 0.5 * cfg.air_density * cfg.Cd * cfg.frontal_area * cfg.target_speed**2
+
+        F_total = F_roll + F_grade + F_accel + F_drag
+
+        #Power calculations
+        P_linear = F_total * cfg.target_speed
+        P_motor_total = P_linear / cfg.drivetrain_efficiency
+        P_motor_per_wheel = P_motor_total / cfg.num_wheels
+
+        #Speed calculations (RPM)
+        wheel_circumference = math.pi * cfg.wheel_diameter
+        wheel_rpm = (cfg.target_speed * 60) / wheel_circumference #times 60 second to minute conversion
+
+        #Torque calculations
+        torque_continuous = (F_total / cfg.num_wheels) * wheel_radius
+        torque_peak = torque_continuous * cfg.safety_factor
+
+        forces_breakdown = {
+            'rolling': F_roll,
+            'grade': F_grade,
+            'accel': F_accel,
+            'drag': F_drag,
+        }
+
+        return MotorRequirements(
+            total_force=F_total,
+            continuous_torque=torque_continuous,
+            peak_torque=torque_peak,
+            power_per_motor=P_motor_per_wheel,
+            wheel_rpm=wheel_rpm,
+            forces=forces_breakdown
+        )
+
+    def sensitivity_analysis(self,
+                             wheel_diameters: List[float] = None,
+                             speeds: List[float] = None,) -> Dict[str, List]:
+        """Perform sensitivity analysis across wheel diameters and speeds"""
+        if wheel_diameters is None:
+            wheel_diameters = [0.3, 0.4, 0.5, 0.6]
+        if speeds is None:
+            speeds = [0.5, 1.0, 1.5, 2.0]
+
+        results = {
+            'wheel_diameters': [],
+            'speeds': [],
+            'torques': [],
+            'powers': [],
+            'rpms': []
+        }
+
+        original_diameter = self.config.wheel_diameter
+        original_speed = self.config.target_speed
+
+        for diameter in wheel_diameters:
+            for speed in speeds:
+                self.config.wheel_diameter = diameter
+                self.config.target_speed = speed
+
+                req = self.calculate_requirements()
+
+                results['wheel_diameters'].append(diameter)
+                results['speeds'].append(speed)
+                results['torques'].append(req.continuous_torque)
+                results['powers'].append(req.power_per_motor)
+                results['rpms'].append(req.wheel_rpm)
+
+        #Restore original values
+        self.config.wheel_diameters = original_diameter
+        self.config.speeds = original_speed
+
+        return results
+
+############################## going to add plotting functions #################################
+
+def print_results(req: MotorRequirements, config: RoverConfig):
+    """Print results"""
+    print("\n" + "="*60) #not sure what this is for
+    print("ROVER MOTOR REQUIREMENT ANALYSIS")
+    print("="*60) #making the output formatted
+    print(f"Rover Configuration:")
+    print(f"  Mass: {config.mass} kg")
+    print(f"  Wheels: {config.num_wheels}")
+    print(f"  Wheel Diameter: {config.wheel_diameter} m")
+    print(f"  Target Speed: {config.target_speed} m/s")
+    print(f"  Max Incline: {config.max_incline} degrees")
+    print(f"  Terrain Crr: {config.Crr} ") #need to fix this so that its for different terrains
+    print("\nMOTOR REQUIREMENTS PER WHEEL:")
+    print(f"  Continuous Torque: {req.continuous_torque:.1f} Nm")
+    print(f"  Peak Torque: {req.peak_torque:.1f} Nm")
+    print(f"  Continuous Power: {req.power_per_motor:.0f} W")
+    print(f"  Wheel RPM: {req.wheel_rpm:.0f} RPM")
+
+    print("\nFORCE BREAKDOWN:")
+    for force_name, force_value in req.forces.items():
+        print(f"  {force_name.capitalize()}: {force_value:.1f} N")
+
+    print(f"\nTOTAL TRACTIVE FORCE: {req.total_force:.1f} N")
+
+    #Gear reduction recommendation
+    motor_base_rpm = 4000  #number chose based on typical BLDC motor
+    gear_reduction = motor_base_rpm / req.wheel_rpm
+    print(f"  For 4000 RPM motor: {gear_reduction:.1f}:1 reduction ratio")
+
+def interactive_calculator():
+    """Interactive console interface for the calculator"""
+    config = RoverConfig()
+    calculator = RoverMotorCalculator(config)
+
+    while True:
+        print("\n" + "="*50)
+        print("Rover Motor Calculator")
+        print("="*50)
+        print("Current Configuration:")
+        print(f"1. Mass: {config.mass} kg")
+        print(f"2. Number of Wheels: {config.num_wheels}")
+        print(f"3. Wheel Diameter: {config.wheel_diameter} m")
+        print(f"4. Target Speed: {config.target_speed} m/s")
+        print(f"5. Max Incline: {config.max_incline} degrees")
+        print(f"6. Terrain Type (Crr): {config.Crr}")
+        print(f"7. Calculate")
+        print(f"8. Plot")
+        print(f"9. Exit")
+        #------------plotting stuff fix this later
+
+        choice = input("\nSelect an option (1-9): ").strip()
+
+        if choice == '1':
+            config.mass = float(input("Enter Rover Mass (kg): "))
+        elif choice == '2':
+            config.num_wheels = int(input("Enter Number of Wheels: "))
+        elif choice == '3':
+            config.wheel_diameter = float(input("Enter Wheel Diameter (m): "))
+        elif choice == '4':
+            config.target_speed = float(input("Enter Target Speed (m/s): "))
+        elif choice == '5':
+            config.max_incline = float(input("Enter Max Incline (degrees): "))
+        elif choice == '6':
+            print("\nTerrain Types:")
+            print("0.1 - Concrete/hard surface")
+            print("0.15 - Firm soil")
+            print("0.2 - Muddy Terrain")
+            print("0.25 - Soft Mud")
+            print("0.30 - Very Soft Mud/Sand")
+            config.Crr = float(input("Select Crr: "))
+        elif choice == '7':
+            requirements = calculator.calculate_requirements()
+            print_results(requirements, config)
+        elif choice == '8':
+            print("plotting coming soon...")
+        elif choice == '9':
+            print("Thank You!")
+            break
+        else:
+            print("Invalid input")
+
+if __name__ == "__main__":
+    #Example usage
+    print("Rover Motor Requirement Calculator")
+    print("Loading interactive calculator...")
+    interactive_calculator()
